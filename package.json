@@ -1,0 +1,11 @@
+{
+  "name": "reels-sistemi",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "kaydet": "node araclar/kaydet.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.48.2"
+  }
+}

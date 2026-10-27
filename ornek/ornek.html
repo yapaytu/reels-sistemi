@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;900&family=JetBrains+Mono:wght@700&display=block" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #111; }
+  body { display: grid; place-items: center; overflow: hidden; }
+  #sahne { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: #fff; transform-origin: center; font-family: Unbounded, sans-serif; }
+  #sahne * { box-sizing: border-box; }
+  body.kayit { display: block; background: #fff; }
+  .k { position: absolute; }
+  .baslik { position: absolute; left: 0; right: 0; text-align: center; font-weight: 900; letter-spacing: -0.05em; line-height: 0.95; color: var(--ink); white-space: nowrap; }
+  .kutu { position: absolute; background: #fff; border: 7px solid var(--ink); border-radius: 30px; box-shadow: 11px 11px 0 var(--ink); }
+  .damga { position: absolute; translate: -50% -50%; font-weight: 900; color: #fff; border: 7px solid var(--ink); box-shadow: 10px 10px 0 var(--ink); white-space: nowrap; letter-spacing: -0.03em; }
+  .alt { position: absolute; left: 60px; right: 60px; display: flex; justify-content: center; gap: 18px; font-weight: 900; letter-spacing: -0.03em; }
+  .alt span { padding: 4px 22px 12px; border-radius: 16px; background: #fff; color: var(--ink); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); }
+  .alt span.su { background: var(--vurgu); color: #fff; }
+</style>
+</head>
+<body>
+<div id="sahne"></div>
+<!-- kelime zamanları: python3 araclar/kelimeler.py ses-kisa.wav ciktilar/kelimeler.js -->
+<script src="kelimeler.js"></script>
+<script>
+// ================= sistem: dokunma =================
+window.FPS = 30;
+const W = 1080, H = 1920;
+const sahne = document.getElementById("sahne");
+document.documentElement.style.setProperty("--ink", "#141418");
+const c01 = (x) => Math.max(0, Math.min(1, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const cik = (x) => 1 - Math.pow(1 - c01(x), 3);                                   // yumuşak duruş
+const yay = (f, at, sert = 1) => {                                                 // yay gibi taşıp oturma, 0→1
+  const t = (f - at) / 30; if (t <= 0) return 0;
+  return 1 - Math.exp(-7 * sert * t) * Math.cos(16 * sert * t);
+};
+const nab = (f, at, g = 0.12) => { const t = f - at; return t < 0 || t > 12 ? 1 : 1 + g * (t < 3 ? t / 3 : 1 - (t - 3) / 9); }; // vuruşta kısa büyüme
+const sars = (f, at, guc = 14) => { const t = f - at; if (t < 0 || t > 10) return [0, 0]; const d = (1 - t / 10) * guc; return [Math.sin(t * 2.7) * d, Math.cos(t * 3.3) * d * 0.7]; };
+const rnd = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+const ILK = 6; // ses 6. karede başlar (ilk kare hiçbir zaman boş değil); kaydet.mjs --ses de sesi 0.2 sn geciktirir
+const KEL = (window.KELIMELER || []).map((k) => ({ ...k, fs: Math.round(k.s * FPS) + ILK, fe: Math.round(k.e * FPS) + ILK }));
+const norm = (t) => t.toLocaleLowerCase("tr-TR").replace(/[^\p{L}\p{N}]/gu, "");
+/** Kelimenin söylendiği kare. n = kaçıncı geçişi (0'dan). Metinde aynı kelime birden çok geçiyorsa n'yi doğru ver. */
+const an = (kelime, n = 0) => {
+  const l = KEL.filter((k) => norm(k.w) === norm(kelime));
+  if (!l[n]) throw new Error("kelime yok: " + kelime + " #" + n);
+  return l[n].fs;
+};
+// altyazı grupları: en fazla 2 kelime, cümle sonunda yeni grup
+const GRUP = []; KEL.forEach((k, i) => { const o = KEL[i - 1]; GRUP.push(i && GRUP[i - 1] === GRUP[i - 2] ? i : i && !/[.!?,]$/.test(o.w) && GRUP[i - 1] === i - 1 ? i - 1 : i); });
+const konusuyor = (f) => KEL.some((k) => f >= k.fs && f <= k.fe);
+/** Damga: vurgulu kelimede ekrana çakılan etiket. */
+const damga = (f, at, yazi, x, y, { renk = "#FF4D2E", boy = 64, aci = -6 } = {}) => {
+  if (f < at - 2) return "";
+  const e = yay(f, at - 2, 1.4);
+  return `<div class="damga" style="left:${x}px;top:${y}px;font-size:${boy}px;background:${renk};padding:${boy * 0.12}px ${boy * 0.4}px ${boy * 0.2}px;border-radius:${boy * 0.26}px;rotate:${lerp(aci * 3.5, aci, c01(e))}deg;scale:${lerp(3, 1, e)};opacity:${c01(e * 3)}">${yazi}</div>`;
+};
+/** Altyazı: o an söylenen kelime ve yanındaki kelime, söylenen renkli. */
+const altyazi = (f, ust = 1235) => {
+  const i = KEL.findIndex((k, j) => f >= k.fs - 2 && f < (KEL[j + 1] ? Math.min(KEL[j + 1].fs - 2, k.fe + 14) : k.fe + 14));
+  if (i < 0) return "";
+  const g = GRUP[i];
+  const grup = KEL.slice(g, GRUP.lastIndexOf(g) + 1);
+  const uzun = grup.map((k) => k.w).join(" ").length;
+  const boy = uzun > 19 ? 42 : uzun > 14 ? 52 : 62;
+  return `<div class="alt" style="top:${ust}px;font-size:${boy}px">${grup.map((k, j) => `<span class="${g + j === i ? "su" : ""}">${k.w.replace(/[.,:;]$/, "").toLocaleUpperCase("tr-TR")}</span>`).join("")}</div>`;
+};
+// ================= sistem sonu =================
+
+// ================= AYAR =================
+document.documentElement.style.setProperty("--vurgu", "#FF4D2E");
+const SON = KEL.length ? KEL[KEL.length - 1].fe : 150;
+window.SURE = (SON + 30) / FPS;                // ses bitince 1 sn nefes
+
+// Örnek: YapayTU'nun "17 günde 1,4 milyon izlenme" Reel'inin ilk 8 saniyesi. Ses: ornek/kelimeler.js (sadece zamanlar).
+const T = { milyon: an("milyon"), izlenme: an("izlenme"), ve: an("Ve"), cekmedim: an("çekmedim"), kamera: an("Kamera"), kurgu: an("kurgu"), editor: an("editör"), yok: [0, 1, 2].map((n) => an("yok", n)) };
+const SARSINTI = [T.izlenme, T.cekmedim + 4, ...T.yok.map((a) => a + 1)];
+const tr = (n) => Math.round(n).toLocaleString("tr-TR");
+const KAMERA = `<svg width="300" height="300" viewBox="0 0 100 100"><rect x="8" y="28" width="62" height="48" rx="10" fill="#FFC83D" stroke="#141418" stroke-width="7"/><path d="M70 44 L92 32 L92 72 L70 60 Z" fill="#FFC83D" stroke="#141418" stroke-width="7" stroke-linejoin="round"/><circle cx="26" cy="44" r="6" fill="#FF4D2E"/></svg>`;
+
+// ================= SAHNELER =================
+const SAHNELER = [
+  // 1) hook: sayaç koşar, İZLENME çakılır
+  { bas: 0, ciz: (f) => {
+      const say = 1400000 * cik((f + 14) / (T.izlenme + 18));
+      const kart = (i) => { const d = i - 2; const e = yay(f, i * 2 - 12); return `<div class="kutu" style="left:${540 + d * 170 - 130}px;top:${lerp(1500, 640 + d * d * 16, c01(e))}px;width:260px;height:420px;rotate:${d * 7}deg;background:${["#FFE3D9", "#DCE4FF", "#E2F6EA", "#FFF2CC", "#F1E6FF"][i]};display:flex;align-items:flex-end;padding:22px"><div style="background:#141418;color:#fff;border-radius:22px;padding:6px 18px 10px;font-weight:900;font-size:34px">${["195K", "190K", "158K", "157K", "130K"][i]}</div></div>`; };
+      return `
+      <div class="baslik" style="top:200px;font-size:60px"><span style="display:inline-block;background:#FF4D2E;color:#fff;padding:0 20px 8px;border:6px solid #141418;border-radius:16px;box-shadow:6px 6px 0 #141418;rotate:-3deg">17 GÜNDE</span></div>
+      <div class="baslik" style="top:315px;font-size:132px;color:#FF4D2E;filter:drop-shadow(7px 7px 0 #141418);scale:${nab(f, T.milyon, 0.08)}">${tr(say)}</div>
+      <div class="baslik" style="top:478px;font-size:64px;scale:${c01(yay(f, T.izlenme - 4, 1.4))}">İZLENME</div>
+      ${[0, 1, 2, 3, 4].map(kart).join("")}`;
+  } },
+  // 2) kamera üstü çizilir, 0 ÇEKİM damgası
+  { bas: T.ve - 4, ciz: (f, g) => {
+      const c = c01((f - T.cekmedim + 2) / 7);
+      return `
+      <div class="baslik" style="top:205px;font-size:66px">ÇEKİLEN VİDEO</div>
+      <div class="kutu" style="left:280px;top:500px;width:520px;height:520px;border-radius:260px;display:grid;place-items:center;scale:${yay(g, 0)}">${KAMERA}
+        <svg width="520" height="520" viewBox="0 0 520 520" style="position:absolute;left:-7px;top:-7px">
+          <circle cx="260" cy="260" r="232" fill="none" stroke="#FF4D2E" stroke-width="34" stroke-dasharray="1458" stroke-dashoffset="${1458 * (1 - c)}" transform="rotate(-135 260 260)"/>
+          <line x1="96" y1="96" x2="${96 + 328 * c}" y2="${96 + 328 * c}" stroke="#FF4D2E" stroke-width="34" stroke-linecap="round"/>
+        </svg></div>
+      ${damga(f, T.cekmedim + 4, "0 ÇEKİM", 540, 1110, { boy: 80, aci: -5 })}`;
+  } },
+  // 3) kamera / kurgu / editör: her "yok"ta üstü çizilir
+  { bas: T.kamera - 4, ciz: (f) => ["KAMERA", "KURGU PROGRAMI", "EDİTÖR"].map((ad, i) => {
+      const at = [T.kamera, T.kurgu, T.editor][i] - 3;
+      if (f < at) return "";
+      const e = yay(f, at), c = c01((f - T.yok[i] + 1) / 5);
+      return `<div class="kutu" style="left:110px;top:${300 + i * 290}px;width:860px;height:240px;display:flex;align-items:center;padding:0 50px;translate:${(1 - e) * (i % 2 ? -900 : 900)}px 0;background:${c > 0.5 ? "#F1EFEA" : "#fff"}">
+        <div style="position:relative;font-weight:900;font-size:${i === 1 ? 56 : 76}px;letter-spacing:-0.04em;color:${c > 0.5 ? "#9A9AA0" : "#141418"}">${ad}
+          <div style="position:absolute;left:-10px;top:52%;height:12px;width:${c * 104}%;background:#FF4D2E;border-radius:6px"></div></div>
+        ${damga(f, T.yok[i] + 1, "YOK", 760, 40, { boy: 56, aci: i % 2 ? 8 : -8 })}</div>`;
+    }).join("") },
+];
+
+window.ciz = (f) => {
+  let s = 0;
+  SAHNELER.forEach((x, i) => { if (f >= x.bas) s = i; });
+  const [sx, sy] = SARSINTI.map((a) => sars(f, a)).reduce((m, v) => [m[0] + v[0], m[1] + v[1]], [0, 0]);
+  sahne.innerHTML = `
+    <div class="k" style="inset:0;background:#fff;background-image:radial-gradient(rgba(14,14,16,0.08) 1.6px,transparent 1.8px);background-size:26px 26px"></div>
+    <div class="k" style="inset:0;translate:${sx}px ${sy}px">${SAHNELER[s].ciz(f, f - SAHNELER[s].bas)}</div>
+    ${altyazi(f)}`;
+};
+
+// ================= önizleme / kayıt: dokunma =================
+if (new URLSearchParams(location.search).has("kayit")) document.body.classList.add("kayit");
+else {
+  const sigdir = () => { sahne.style.transform = `scale(${Math.min(innerWidth / W, innerHeight / H)})`; };
+  addEventListener("resize", sigdir); sigdir();
+  const bas = performance.now();
+  const dongu = () => { window.ciz(Math.floor(((performance.now() - bas) / 1000) * FPS) % Math.round(SURE * FPS)); requestAnimationFrame(dongu); };
+  document.fonts.ready.then(() => requestAnimationFrame(dongu));
+}
+</script>
+</body>
+</html>

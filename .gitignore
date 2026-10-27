@@ -1,0 +1,5 @@
+node_modules/
+ciktilar/*
+!ciktilar/.gitkeep
+*.mp4
+.DS_Store
